@@ -1,0 +1,151 @@
+---
+title: "Site C Point Count Data: QA and Basic Exploration"
+output:
+  html_notebook:
+    toc: TRUE
+    toc_float: TRUE
+---
+
+This script is for import, tidy and quality assurance checks of the survey data.
+
+To keep referential integrity, it seems best to join the three tables (stations, surveys and obs).
+
+That way the visits can be properly renumbered (although that really only matters for the visit analysis)
+
+# Setup
+
+```{r message=FALSE, include=FALSE}
+# Packages
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(skimr)
+library(kableExtra)
+```
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(message = FALSE)
+options(scipen = 999)
+
+```
+
+# Read and Tidy Data
+Use the import script.
+```{r}
+source("import_and_prep/import_point_count_data.R")
+```
+
+
+# Check for errors
+
+Check for duplicates in stations\$StationID.
+
+```{r}
+stations %>% 
+  count(StationID) %>% 
+  filter(n>1)
+```
+
+Check for duplicates in surveys\$StationID & Visit.
+
+Note: There are some duplicates in 2011 data. Need to fix (2020-06-29).
+
+```{r}
+surveys %>% 
+  count(StationID, Visit) %>% 
+  filter(n>1)
+```
+
+Check to see if there is a match for StationID between stations and surveys. This can be done using a full join and then filter.
+
+```{r}
+# Join the two tables
+StationID_match <- stations %>% 
+  full_join(surveys, by = "StationID")
+# Filter to check for StationID in `surveys` but not in `stations`.
+StationID_match %>% filter(is.na(Year))
+# Filter to check for StationID in `stations` but not in `surveys`.
+StationID_match %>% filter(is.na(Visit))
+```
+
+Now check for match for StationID between 'surveys' and 'obs'. Note that stations and surveys must be clean before this is useful.
+
+For the second "test", surveys that had no observations will also be listed.
+
+```{r paged.print=TRUE}
+StationID_match <- surveys %>% 
+  full_join(obs, by = c("StationID", "Visit"))
+# Filter to check for `StationID $ Visit` in `obs` but not in `surveys`.
+StationID_match %>% filter(is.na(Date))
+# Filter to check for `StationID $ Visit` in `surveys` but not in `obs`.
+# NB: This might be because of no birds observations rather than data entry error.
+StationID_match %>% filter(is.na(SpCode))
+```
+
+Validate species codes in obs table.
+
+NONE is used to indicate a survey with no observations.
+
+```{r}
+obs %>% 
+  left_join(BCbirds, by = "SpCode") %>% 
+  filter(is.na(`English Name`))
+```
+
+Check missing values (nulls).
+
+```{r}
+is.null(stations)
+is.null(surveys)
+is.null(obs)
+```
+
+# Create summary tables to see if any values out of range
+
+Map station coordinates for anything out of range.
+
+```{r}
+stations %>% 
+  ggplot(aes(x = Easting, y = Northing, colour = Year)) + 
+  geom_point()
+```
+
+Summary by number of visits.
+
+```{r message=FALSE}
+visit_sum <- surveys %>% 
+  group_by(StationID, Year = year(Date)) %>% 
+  summarize(Visits = n()) %>% 
+  mutate(Visits = as_factor(Visits)) %>% 
+  group_by(Year, Visits) %>% 
+  summarize("Number of Locations" = n())
+
+# Make a summary table
+visit_sum %>% 
+  pivot_wider(id_cols = "Visits", 
+              names_from = "Year", 
+              values_from = "Number of Locations") %>% 
+  replace(is.na(.), 0) %>% 
+  kable()
+
+# Plot for presentation
+visit_sum %>% 
+  ggplot(aes(x = as.character(Year), y = `Number of Locations`,
+             fill = Visits)) +
+  geom_bar(stat = "identity") +
+#  scale_fill_brewer(palette="reds") +
+  xlab("Year")
+```
+
+```{r paged.print=TRUE}
+# Survey dates and times.
+table(year(surveys$Date))
+table(month(surveys$Date))
+table(hour(surveys$Time))
+
+# Observations counts
+table(obs$Count)
+# Distances
+table(obs$`Distance Category`)
+```
+
